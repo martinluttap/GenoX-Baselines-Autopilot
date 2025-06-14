@@ -6,7 +6,7 @@ import os
 import pathlib
 import time
 
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List, Set, Tuple
 
 
 def get_ctr_map(components):
@@ -45,24 +45,32 @@ def get_running_containers(root_dir: str):
             if d.startswith('docker-') and d.endswith('.scope'):
                 ctrs.append(d)
 
-    print(f'Found {len(ctrs)} running containers: {[c.lstrip('docker-')[:5] for c in ctrs]}')
+    print(f"Found {len(ctrs)} running containers: {[c.lstrip('docker-')[:5] for c in ctrs]}")
     return ctrs
 
-class SHOWAR:
+class AutoPilot:
     def __init__(self, root_dir: str = f"/sys/fs/cgroup/system.slice") -> None:
         self.running_containers = []
         self.stats_history = {}
         self.ctr_map = {}
         self.root_dir = root_dir
-        self.sample_rate_sec = 1  # 20ms
-        self.scale_freq_sec = 1  # 20ms
+        self.sample_rate_sec = 0.1  # Sample CPU usage every this sec
+        self.scale_freq_sec = 0.1  # Trigger scaling decision every this sec
+        self.agg_freq_sec = 2 # Aggregate every this secs
         self.last_scale_t = 0
-        self.window_len = 10  # 50ms
-        self.thresh_perc = 0.15
+        self.last_agg_t = 0
+        self.agg_len = int(self.agg_freq_sec / self.scale_freq_sec) # Num. elements aggregated
+        self.agg_lifetime_sec = 300 # Keep agg_sample for this long  
+        self.rec_last_n_samples = 10 # Number of agg samples for weighted average
+        self.window_len = 1000  # 
+        self.thresh_perc = 0.1
+        self.dt_wall = 0.0
 
         # State
         self.spread = {}
         self.last_t = 0
+        self.raw_samples = []
+        self.hist_agg_samples = []
         self.files = {}
 
         self.update_state()
@@ -70,6 +78,22 @@ class SHOWAR:
         for name in self.running_containers:
             self.spread[name] = None
             set_cpu_limit(self.ctr_map, name, None)
+
+    def decaying_weight(self, age: float, t_half: float = 10.0) -> float:
+        """Exponential decay function."""
+        return 2**(-age / t_half)
+
+    def hists_average(self, hists: List[Tuple]) -> float:
+        numerator = []
+        denominator = []
+        for idx, hist in enumerate(hists):
+            values, boundaries = hist
+            avg = np.sum(boundaries[1:]*values) / np.sum(values)
+            weight = self.decaying_weight(len(hists) - idx)
+            numerator.append(weight * avg)
+            denominator.append(weight)
+
+        return np.sum(numerator) / np.sum(denominator)
 
     def update_state(self):
         self.running_containers = get_running_containers(self.root_dir)
@@ -86,6 +110,7 @@ class SHOWAR:
         t += tt
         time.sleep(tt)
         print(f'At {t:.4f} woke up')
+        self.dt_wall = t - self.last_t
         self.last_t = t
 
     def wait_cgroup_exist(self):
@@ -169,7 +194,7 @@ class SHOWAR:
             # Type + derive values
             for name in self.running_containers:
                 try:
-                    stats[name]["cpu_usage"] = int(stats[name]["cpu_usage"]) / 1e9
+                    stats[name]["cpu_usage"] = int(stats[name]["cpu_usage"])
                     stats[name]["dt_cpu_usage"] = (
                         stats[name]["cpu_usage"]
                         - self.stats_history[name][-1][1]["cpu_usage"]
@@ -210,26 +235,39 @@ class SHOWAR:
                 std = np.std(cpu_usages)
                 spread = mean + (3 * std)
                 target_core = spread / self.sample_rate_sec
-                print(f'mean={mean:.4f}, std={std:.4f}, Target core for {name[:5]}={target_core:.4f}')
-                if not self.spread[name]:
-                    self.spread[name] = spread
+                
+                cpu_util = self.stats_history[name][-1][1]["dt_cpu_usage"]/self.dt_wall*100
+                numcores = os.cpu_count()
+                cores_used = cpu_util / 100 / numcores
+
+                # Make sure the system samples at 0 < N < 1s granularity, and stores the values for up to 200 last readings. 
+                self.raw_samples.append(cores_used)
+                # On every T interval, aggregate latest agg_len samples into a single vector
+                if len(self.raw_samples) >= self.agg_len:
+                    self.hist_agg_samples.append((self.last_t, self.raw_samples))
+                    self.raw_samples = []
+                    self.last_agg_t = self.last_t
                 else:
-                    diff = np.abs(spread - self.spread[name])
-                    threshold = self.thresh_perc * self.spread[name]
-                    last_scale_diff = np.abs(self.last_scale_t - self.last_t) 
-                    print(f"At t={self.last_t:.4f}, {name[:5]}, curr. spread={self.spread[name]:.4f}, obs. spread={spread:.4f}, len={len(self.stats_history[name])}, thresh={threshold:.4f}, last_scale_diff={last_scale_diff:.4f}")
-                    # hist = self.stats_history[name][-5:]
-                    # dts = []
-                    # for e in hist:
-                    #     dts.append(e[1]["dt_cpu_usage"])
-                    print(f'At t={self.last_t}, dts={cpu_usages}, mu={mean:.4f}, std={std:.4f}')
-                    if (diff > threshold) and \
-                        (last_scale_diff > self.scale_freq_sec):
-                        # limit -> quota_us conversion requires quota >= 1000
-                        target_core = max((spread / self.sample_rate_sec), 0.01)
-                        set_cpu_limit(self.ctr_map, name, target_core)
-                        self.spread[name] = spread
-                        self.last_scale_t = self.last_t
+                    print(f't={self.last_t}, samples={len(self.raw_samples)}/{self.agg_len}, skipping ...')
+                    continue 
+                
+                # Calculate recommendation 
+                samples = np.array([e[1] for e in self.hist_agg_samples[-self.rec_last_n_samples:]])
+                if len(samples) >= self.rec_last_n_samples:
+                    hists = [np.histogram(s) for s in samples]
+                    s_avg_t = self.hists_average(hists)
+
+                    # limit -> quota_us conversion requires quota >= 1000
+                    target_core = max(s_avg_t * numcores, 0.01)
+                    set_cpu_limit(self.ctr_map, name, target_core)
+                    self.last_scale_t = self.last_t
+
+                # Check and evict agg_sample older than lifetime
+                if self.hist_agg_samples:
+                    oldest_agg_t, _ = self.hist_agg_samples[0]
+                    if (self.last_t - oldest_agg_t) >= self.agg_lifetime_sec:
+                        self.hist_agg_samples.pop(0)  
+
 
     def get_cpu_usages(self, name: str) -> List[float]:
         hist = self.stats_history[name]
@@ -239,10 +277,9 @@ class SHOWAR:
 
         return cpu_usages
 
-
 def main():
-    showar = SHOWAR()
-    showar.run()
+    ap = AutoPilot()
+    ap.run()
 
 
 if __name__ == "__main__":
