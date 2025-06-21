@@ -56,12 +56,12 @@ class AutoPilot:
         self.root_dir = root_dir
         self.sample_rate_sec = 0.1  # Sample CPU usage every this sec
         self.scale_freq_sec = 0.1  # Trigger scaling decision every this sec
-        self.agg_freq_sec = 2 # Aggregate every this secs
+        self.agg_freq_sec = 1 # Aggregate every this secs
         self.last_scale_t = 0
         self.last_agg_t = 0
         self.agg_len = int(self.agg_freq_sec / self.scale_freq_sec) # Num. elements aggregated
         self.agg_lifetime_sec = 300 # Keep agg_sample for this long  
-        self.rec_last_n_samples = 10 # Number of agg samples for weighted average
+        self.rec_last_n_samples = 2 # Number of agg samples for weighted average
         self.window_len = 1000  # 
         self.thresh_perc = 0.1
         self.dt_wall = 0.0
