@@ -11,14 +11,14 @@ from typing import Any, Dict, List, Set, Tuple
 
 def get_ctr_map(components):
     ctr_map = {}
-    for name in components:
-        ctr_map[name] = f"docker/{name}/"
+    for path in components:
+        ctr_map[path] = path  # Use full cgroup path
     return ctr_map
 
 
 def stat_path(ctr_map, name, stat):
     group = ctr_map[name]
-    return pathlib.Path(f"/sys/fs/cgroup/cpu/{group}/{stat}")
+    return pathlib.Path(f"{group}/{stat}")
 
 
 def set_cpu_limit(ctr_map, name, limit, period=0.1):
@@ -40,16 +40,14 @@ def set_cpu_limit(ctr_map, name, limit, period=0.1):
 
 
 def get_running_containers(root_dir: str):
-    # traverse root directory, and list directories as dirs and files as files
+    # Find docker/cri-containerd scope directories under kubepods.slice
     ctrs: List[str] = []
-    for root, dirs, files in os.walk(f"{root_dir}"):
-        path = root.split(os.sep)
-        # print((len(path) - 1) * "---", os.path.basename(root))
-        ctrs.extend(dirs)
-        for file in files:
-            pass
-            # print(len(path) * '---', file)
-
+    for root, dirs, files in os.walk("/sys/fs/cgroup/kubepods.slice"):
+        for d in dirs:
+            if d.startswith("docker-") and d.endswith(".scope"):
+                ctrs.append(os.path.join(root, d))
+            elif d.startswith("cri-containerd-") and d.endswith(".scope"):
+                ctrs.append(os.path.join(root, d))
     return ctrs
 
 class AutoPilot:
