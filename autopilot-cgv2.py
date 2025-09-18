@@ -190,7 +190,7 @@ class AutoPilot:
                     print(f"Unexpected error for {name}: {e}. Skipping this container.")
                     continue
                 print(stats)
-            return stats
+        return stats
 
     def run(self):
         monotonic_base = time.time() - time.perf_counter()
