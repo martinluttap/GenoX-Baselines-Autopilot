@@ -189,7 +189,7 @@ class AutoPilot:
                 except Exception as e:
                     print(f"Unexpected error for {name}: {e}. Skipping this container.")
                     continue
-            print(stats)
+                print(stats)
             return stats
 
     def run(self):
