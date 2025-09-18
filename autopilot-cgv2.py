@@ -142,36 +142,55 @@ class AutoPilot:
     def get_stats(self):
         stats = collections.defaultdict(dict)
         for name in self.running_containers:
-            # Parse cpu.stat for usage_usec, nr_periods, nr_throttled, throttled_usec
-            self.files[name, "cpu.stat"].seek(0)
-            usage_usec = None
-            nr_periods = None
-            nr_throttled = None
-            throttled_usec = None
-            for line in self.files[name, "cpu.stat"].read().splitlines():
-                k, v = line.split()
-                if k == "usage_usec":
-                    usage_usec = int(v)
-                elif k == "nr_periods":
-                    nr_periods = int(v)
-                elif k == "nr_throttled":
-                    nr_throttled = int(v)
-                elif k == "throttled_usec":
-                    throttled_usec = int(v)
-            stats[name]["cpu_usage"] = usage_usec / 1e6 if usage_usec is not None else 0  # seconds
-            stats[name]["cpu_stat.nr_periods"] = nr_periods if nr_periods is not None else 0
-            stats[name]["cpu_stat.nr_throttled"] = nr_throttled if nr_throttled is not None else 0
-            stats[name]["cpu_stat.throttled_time"] = throttled_usec / 1e6 if throttled_usec is not None else 0  # seconds
-            # Parse cpu.max for quota and period
-            self.files[name, "cpu.max"].seek(0)
-            cpu_max = self.files[name, "cpu.max"].read().strip().split()
-            if cpu_max[0] == "max":
-                stats[name]["cpu_cfs_quota_us"] = -1
-            else:
-                stats[name]["cpu_cfs_quota_us"] = int(cpu_max[0])
-            stats[name]["cpu_cfs_period_us"] = int(cpu_max[1])
-        print(stats)
-        return stats
+                try:
+                    # Parse cpu.stat for usage_usec, nr_periods, nr_throttled, throttled_usec
+                    if (name, "cpu.stat") not in self.files:
+                        stat_path_obj = stat_path(self.ctr_map, name, "cpu.stat")
+                        if not stat_path_obj.is_file():
+                            print(f"Warning: cpu.stat not found for {name}, skipping.")
+                            continue
+                        self.files[name, "cpu.stat"] = stat_path_obj.open()
+                    self.files[name, "cpu.stat"].seek(0)
+                    usage_usec = None
+                    nr_periods = None
+                    nr_throttled = None
+                    throttled_usec = None
+                    for line in self.files[name, "cpu.stat"].read().splitlines():
+                        k, v = line.split()
+                        if k == "usage_usec":
+                            usage_usec = int(v)
+                        elif k == "nr_periods":
+                            nr_periods = int(v)
+                        elif k == "nr_throttled":
+                            nr_throttled = int(v)
+                        elif k == "throttled_usec":
+                            throttled_usec = int(v)
+                    stats[name]["cpu_usage"] = usage_usec / 1e6 if usage_usec is not None else 0  # seconds
+                    stats[name]["cpu_stat.nr_periods"] = nr_periods if nr_periods is not None else 0
+                    stats[name]["cpu_stat.nr_throttled"] = nr_throttled if nr_throttled is not None else 0
+                    stats[name]["cpu_stat.throttled_time"] = throttled_usec / 1e6 if throttled_usec is not None else 0  # seconds
+                    # Parse cpu.max for quota and period
+                    if (name, "cpu.max") not in self.files:
+                        max_path_obj = stat_path(self.ctr_map, name, "cpu.max")
+                        if not max_path_obj.is_file():
+                            print(f"Warning: cpu.max not found for {name}, skipping.")
+                            continue
+                        self.files[name, "cpu.max"] = max_path_obj.open()
+                    self.files[name, "cpu.max"].seek(0)
+                    cpu_max = self.files[name, "cpu.max"].read().strip().split()
+                    if cpu_max[0] == "max":
+                        stats[name]["cpu_cfs_quota_us"] = -1
+                    else:
+                        stats[name]["cpu_cfs_quota_us"] = int(cpu_max[0])
+                    stats[name]["cpu_cfs_period_us"] = int(cpu_max[1])
+                except (OSError, IOError) as e:
+                    print(f"Error reading cgroup files for {name}: {e}. Skipping this container.")
+                    continue
+                except Exception as e:
+                    print(f"Unexpected error for {name}: {e}. Skipping this container.")
+                    continue
+            print(stats)
+            return stats
 
     def run(self):
         monotonic_base = time.time() - time.perf_counter()
