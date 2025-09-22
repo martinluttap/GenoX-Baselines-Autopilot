@@ -5,9 +5,11 @@ import numpy as np
 import os
 import pathlib
 import time
-
+import logging
 from typing import Any, Dict, List, Set, Tuple
 
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S',filename='autopilot.log', filemode='a')
 
 def get_ctr_map(components):
     ctr_map = {}
@@ -27,12 +29,12 @@ def set_cpu_limit(ctr_map, name, limit, period=0.1):
     cpu_max_path = stat_path(ctr_map, name, "cpu.max")
     if limit is None:
         cpu_max_path.write_text("max %d" % period_us)
-        print(f"{datetime.datetime.now()} Written cpu.max=max {period_us} to name={name},(qos,uid)={ctr_map[name]}")
+        logging.info(f"{datetime.datetime.now()} Written cpu.max=max {period_us} to name={name},(qos,uid)={ctr_map[name]}")
     else:
         quota_us = round(limit * period_us)
         assert quota_us >= 1000
         cpu_max_path.write_text(f"{quota_us} {period_us}")
-        print(f"{datetime.datetime.now()} Written cpu.max={quota_us} {period_us} to name={name},(qos,uid)={ctr_map[name]}")
+        logging.info(f"{datetime.datetime.now()} Written cpu.max={quota_us} {period_us} to name={name},(qos,uid)={ctr_map[name]}")
     return
 
 def get_running_containers(root_dir: str):
@@ -42,7 +44,7 @@ def get_running_containers(root_dir: str):
         for d in dirs:
             if (d.startswith("docker-") or d.startswith("cri-containerd-")) and d.endswith(".scope"):
                 ctrs.append(os.path.join(root, d))
-    print(f"Found {len(ctrs)} running containers: {[os.path.basename(c)[:20] for c in ctrs]}")
+    logging.info(f"Found {len(ctrs)} running containers: {[os.path.basename(c)[:20] for c in ctrs]}")
     return ctrs
 
 class AutoPilot:
@@ -103,10 +105,10 @@ class AutoPilot:
         t = time.perf_counter()
         # tt = (0.097 - t) * 1000 % 100 / 3000  # ~30ms
         tt = self.sample_rate_sec
-        print(f'At {t:.4f} sleeping for {tt:.4f} sec ...')
+        logging.info(f'At {t:.4f} sleeping for {tt:.4f} sec ...')
         t += tt
         time.sleep(tt)
-        print(f'At {t:.4f} woke up')
+        logging.info(f'At {t:.4f} woke up')
         self.dt_wall = t - self.last_t
         self.last_t = t
 
@@ -122,9 +124,9 @@ class AutoPilot:
                         checked.append(f)
                 if len(checked) == len(to_check):
                     files_ready = True
-                    print(f"Cgroup for {name[:5]} ready! t={self.last_t}")
+                    logging.info(f"Cgroup for {name[:5]} ready! t={self.last_t}")
                 else:
-                    print(
+                    logging.info(
                         f"Cgroup for {name[:5]} not ready, sleeping ... t={self.last_t}"
                     )
                 self.sleep_sample_period()
@@ -147,7 +149,7 @@ class AutoPilot:
                     if (name, "cpu.stat") not in self.files:
                         stat_path_obj = stat_path(self.ctr_map, name, "cpu.stat")
                         if not stat_path_obj.is_file():
-                            print(f"Warning: cpu.stat not found for {name}, skipping.")
+                            logging.info(f"Warning: cpu.stat not found for {name}, skipping.")
                             continue
                         self.files[name, "cpu.stat"] = stat_path_obj.open()
                     self.files[name, "cpu.stat"].seek(0)
@@ -173,7 +175,7 @@ class AutoPilot:
                     if (name, "cpu.max") not in self.files:
                         max_path_obj = stat_path(self.ctr_map, name, "cpu.max")
                         if not max_path_obj.is_file():
-                            print(f"Warning: cpu.max not found for {name}, skipping.")
+                            logging.info(f"Warning: cpu.max not found for {name}, skipping.")
                             continue
                         self.files[name, "cpu.max"] = max_path_obj.open()
                     self.files[name, "cpu.max"].seek(0)
@@ -184,12 +186,12 @@ class AutoPilot:
                         stats[name]["cpu_cfs_quota_us"] = int(cpu_max[0])
                     stats[name]["cpu_cfs_period_us"] = int(cpu_max[1])
                 except (OSError, IOError) as e:
-                    print(f"Error reading cgroup files for {name}: {e}. Skipping this container.")
+                    logging.info(f"Error reading cgroup files for {name}: {e}. Skipping this container.")
                     continue
                 except Exception as e:
-                    print(f"Unexpected error for {name}: {e}. Skipping this container.")
+                    logging.info(f"Unexpected error for {name}: {e}. Skipping this container.")
                     continue
-                print(stats)
+                logging.info(stats)
         return stats
 
     def run(self):
@@ -200,7 +202,7 @@ class AutoPilot:
             self.sleep_sample_period()
             self.update_state()
             if len(self.running_containers) == 0:
-                print(f"No running containers!")
+                logging.info(f"No running containers!")
                 self.sleep_sample_period()
                 continue
 
@@ -236,7 +238,7 @@ class AutoPilot:
                         stats[name]["cpu_cfs_period_us"]
                     )
                 except Exception as e:
-                    print(f"At t={self.last_t} {name} error {e}")
+                    logging.info(f"At t={self.last_t} {name} error {e}")
 
             for name in stats:
                 self.stats_history[name].append(
@@ -264,7 +266,7 @@ class AutoPilot:
                     self.raw_samples = []
                     self.last_agg_t = self.last_t
                 else:
-                    print(f't={self.last_t}, samples={len(self.raw_samples)}/{self.agg_len}, skipping ...')
+                    logging.info(f't={self.last_t}, samples={len(self.raw_samples)}/{self.agg_len}, skipping ...')
                     continue 
                 
                 # Calculate recommendation 
