@@ -291,7 +291,8 @@ class AutoPilot:
         hist = self.stats_history[name]
         cpu_usages = []
         for ts, stat in hist:
-            cpu_usages.append(stat["dt_cpu_usage"])
+            if "dt_cpu_usage" in stat:
+                cpu_usages.append(stat["dt_cpu_usage"])
 
         return cpu_usages
 
