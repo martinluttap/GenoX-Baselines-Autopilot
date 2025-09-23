@@ -53,9 +53,9 @@ class AutoPilot:
         self.stats_history = {}
         self.ctr_map = {}
         self.root_dir = root_dir
-        self.sample_rate_sec = 0.1  # Sample CPU usage every this sec
-        self.scale_freq_sec = 0.1  # Trigger scaling decision every this sec
-        self.agg_freq_sec = 1 # Aggregate every this secs
+        self.sample_rate_sec = 5  # Sample CPU usage every this sec
+        self.scale_freq_sec = 5  # Trigger scaling decision every this sec
+        self.agg_freq_sec = 5 # Aggregate every this secs
         self.last_scale_t = 0
         self.last_agg_t = 0
         self.agg_len = int(self.agg_freq_sec / self.scale_freq_sec) # Num. elements aggregated
